@@ -12,20 +12,29 @@ const env = require('./config/env');
 const app = express();
 
 // Production CORS Configuration
-const allowedOrigins = [
-  'http://localhost:3000',
-  env.clientUrl
-].filter(Boolean);
+// Uses env.allowedOrigins which is parsed from CLIENT_URL (comma-separated).
+// http://localhost:3000 is always included for local development.
+const allowedOrigins = env.allowedOrigins;
+
+console.log('[CORS] Allowed origins:', allowedOrigins);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o) || o === '*')) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Allow requests with fallback for production Vercel previews
+    // Allow requests with no Origin header (e.g., server-to-server, curl, Postman)
+    if (!origin) {
+      return callback(null, true);
     }
+    // Check if the request origin is in the allowed list
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    // Reject all other origins
+    console.warn('[CORS] Blocked origin:', origin);
+    return callback(new Error(`CORS: Origin '${origin}' not allowed`));
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '20mb' }));
