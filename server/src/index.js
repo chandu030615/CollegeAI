@@ -3,6 +3,8 @@ console.log('[Startup] process.env.PORT =', process.env.PORT);
 console.log('[Startup] NODE_ENV =', process.env.NODE_ENV);
 
 const app = require('./app');
+console.log('[DEBUG] Loaded app from:', require.resolve('./app'));
+console.log('[DEBUG] Health route registered:', !!app._router);
 const env = require('./config/env');
 
 // Render injects PORT as an environment variable.
