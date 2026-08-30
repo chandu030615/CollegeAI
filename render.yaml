@@ -3,7 +3,8 @@ services:
     name: collegeai-backend
     env: node
     region: oregon
-    # Root directory for the backend service — Render will cd into this before running commands
+    # rootDir tells Render to cd into server/ before running build and start.
+    # This ensures server/package.json is used, not the root package.json.
     rootDir: server
     buildCommand: npm install
     startCommand: node src/index.js
