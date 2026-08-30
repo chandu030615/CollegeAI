@@ -1,42 +1,47 @@
+// Log environment immediately on startup for Render deployment debugging
+console.log('[Startup] process.env.PORT =', process.env.PORT);
+console.log('[Startup] NODE_ENV =', process.env.NODE_ENV);
+
 const app = require('./app');
 const env = require('./config/env');
 
-// Render (and most PaaS platforms) inject PORT via environment.
-// Never hard-code port in production.
-const PORT = process.env.PORT || env.port || 5000;
+// Render injects PORT as an environment variable.
+// We must use process.env.PORT directly — do NOT fall back to 5000 on Render.
+const PORT = process.env.PORT || 5000;
+
+console.log('[Startup] Binding to port:', PORT);
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('====================================================');
-  console.log(`🚀 CollegeAI RAG Backend Server Running`);
+  console.log(`CollegeAI RAG Backend Server Running`);
   console.log(`   Port     : ${PORT}`);
-  console.log(`   Env      : ${env.nodeEnv}`);
-  console.log(`   Health   : /api/health`);
-  console.log(`   Auth     : POST /api/auth/register`);
-  console.log(`   Auth     : POST /api/auth/login`);
-  console.log(`   DB       : ${env.supabaseUrl ? 'Supabase configured' : 'In-memory fallback'}`);
+  console.log(`   Env      : ${process.env.NODE_ENV || 'development'}`);
+  console.log(`   Health   : GET /api/health`);
+  console.log(`   Register : POST /api/auth/register`);
+  console.log(`   Login    : POST /api/auth/login`);
+  console.log(`   Supabase : ${process.env.SUPABASE_URL ? 'configured' : 'not configured (using in-memory)'}`);
   console.log('====================================================');
 });
 
 server.on('error', (err) => {
-  console.error('[Server] Failed to start:', err.message);
+  console.error('[Server] FATAL - Failed to start on port', PORT, ':', err.message);
   process.exit(1);
 });
 
-// Handle graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
+  console.log('[Server] SIGTERM received - shutting down gracefully');
   server.close(() => {
-    console.log('HTTP server closed');
+    console.log('[Server] HTTP server closed');
     process.exit(0);
   });
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('[Server] Uncaught Exception:', err.message, err.stack);
+  console.error('[Server] Uncaught Exception:', err.message);
+  console.error(err.stack);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('[Server] Unhandled Rejection:', reason);
-  // Do NOT exit — let individual promises fail gracefully
 });

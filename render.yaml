@@ -3,8 +3,7 @@ services:
     name: collegeai-backend
     env: node
     region: oregon
-    # rootDir tells Render to cd into server/ before running build and start.
-    # This ensures server/package.json is used, not the root package.json.
+    # rootDir: Render runs buildCommand and startCommand inside server/
     rootDir: server
     buildCommand: npm install
     startCommand: node src/index.js
@@ -33,3 +32,6 @@ services:
         value: "150"
       - key: RELEVANCE_THRESHOLD
         value: "0.1"
+    # NOTE: Do NOT set PORT here. Render injects PORT automatically.
+    # If your Render dashboard still shows PORT=5000 as an environment
+    # variable, DELETE it from the Render dashboard > Environment tab.
