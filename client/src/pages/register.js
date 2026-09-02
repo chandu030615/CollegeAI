@@ -2,14 +2,20 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '../store/authContext';
-import { GraduationCap, User, Mail, Lock, Shield, ArrowRight, AlertCircle } from 'lucide-react';
+import {
+  GraduationCap,
+  User,
+  Mail,
+  Lock,
+  ArrowRight,
+  AlertCircle
+} from 'lucide-react';
 
 export default function Register() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState('student');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
@@ -36,15 +42,17 @@ export default function Register() {
     }
 
     setSubmitting(true);
+
     try {
-      const user = await register(name, email, password, role);
-      if (user.role === 'admin') {
-        router.push('/documents');
-      } else {
-        router.push('/chat');
-      }
+      // Public registration always creates a Student account.
+      const user = await register(name, email, password);
+
+      // Students are redirected to the chat page.
+      router.push('/chat');
     } catch (err) {
-      setFormError(err.message || 'Registration failed. Please try again.');
+      setFormError(
+        err.message || 'Registration failed. Please try again.'
+      );
     } finally {
       setSubmitting(false);
     }
@@ -53,18 +61,26 @@ export default function Register() {
   return (
     <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
       <div className="w-full max-w-md space-y-6">
-        
+
         {/* Header */}
         <div className="text-center space-y-2">
           <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400">
             <GraduationCap className="w-7 h-7" />
           </div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">Create Account</h2>
-          <p className="text-sm text-gray-400">Register to start asking college questions</p>
+
+          <h2 className="text-2xl font-bold text-white tracking-tight">
+            Create Student Account
+          </h2>
+
+          <p className="text-sm text-gray-400">
+            Register to start asking college questions
+          </p>
         </div>
 
         {/* Card */}
         <div className="glass-card p-6 sm:p-8 rounded-2xl">
+
+          {/* Error Message */}
           {formError && (
             <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-sm flex items-start space-x-2">
               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -73,46 +89,16 @@ export default function Register() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            
-            {/* Role Switcher */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5">
-                Account Type
-              </label>
-              <div className="grid grid-cols-2 gap-2 p-1 bg-gray-900/80 rounded-xl border border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => setRole('student')}
-                  className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all ${
-                    role === 'student'
-                      ? 'bg-indigo-600 text-white shadow-md'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  <User className="w-3.5 h-3.5" />
-                  <span>Student</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRole('admin')}
-                  className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all ${
-                    role === 'admin'
-                      ? 'bg-purple-600 text-white shadow-md'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>Administrator</span>
-                </button>
-              </div>
-            </div>
 
+            {/* Full Name */}
             <div>
               <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5">
                 Full Name
               </label>
+
               <div className="relative">
                 <User className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+
                 <input
                   type="text"
                   required
@@ -124,12 +110,15 @@ export default function Register() {
               </div>
             </div>
 
+            {/* Email Address */}
             <div>
               <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5">
                 Email Address
               </label>
+
               <div className="relative">
                 <Mail className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+
                 <input
                   type="email"
                   required
@@ -141,12 +130,15 @@ export default function Register() {
               </div>
             </div>
 
+            {/* Password */}
             <div>
               <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5">
                 Password
               </label>
+
               <div className="relative">
                 <Lock className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+
                 <input
                   type="password"
                   required
@@ -158,12 +150,15 @@ export default function Register() {
               </div>
             </div>
 
+            {/* Confirm Password */}
             <div>
               <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5">
                 Confirm Password
               </label>
+
               <div className="relative">
                 <Lock className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+
                 <input
                   type="password"
                   required
@@ -175,6 +170,7 @@ export default function Register() {
               </div>
             </div>
 
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={submitting}
@@ -184,16 +180,20 @@ export default function Register() {
                 <span>Creating Account...</span>
               ) : (
                 <>
-                  <span>Create Account</span>
+                  <span>Create Student Account</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
           </form>
 
+          {/* Login Link */}
           <div className="mt-6 text-center text-xs text-gray-400">
             Already have an account?{' '}
-            <Link href="/login" className="text-indigo-400 hover:underline font-semibold">
+            <Link
+              href="/login"
+              className="text-indigo-400 hover:underline font-semibold"
+            >
               Sign in here
             </Link>
           </div>
