@@ -119,8 +119,22 @@ function selectAnswerSentences(question, content) {
   const matching = ranked.filter(item => item.score > 0);
   const asksWhen = terms.includes('when');
   const datedMatch = asksWhen && matching
-    .filter(item => /\b(before|after|on|by)\b|\b\d{1,2}[:/]\d{2}\b|\b\d{1,2}(st|nd|rd|th)\b/i.test(item.sentence))
-    .sort((a, b) => a.index - b.index)[0];
+    .filter(item =>
+      /\b(before|after|on|by)\b/i.test(item.sentence) ||
+      /\b\d{1,2}[:/]\d{2}\b/i.test(item.sentence) ||
+      /\b\d{1,2}(st|nd|rd|th)\b/i.test(item.sentence) ||
+      /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?\b/i.test(item.sentence)
+    )
+    .sort((a, b) => {
+      const aHasMonthDate = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?\b/i.test(a.sentence);
+      const bHasMonthDate = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?\b/i.test(b.sentence);
+
+      if (aHasMonthDate !== bHasMonthDate) {
+        return aHasMonthDate ? -1 : 1;
+      }
+
+      return a.index - b.index;
+    })[0];
   const selected = datedMatch ? [datedMatch] : matching.slice(0, 1);
 
   return (selected.length ? selected : ranked.slice(0, 1))
