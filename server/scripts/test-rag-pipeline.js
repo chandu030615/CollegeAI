@@ -1,4 +1,6 @@
 const app = require('../src/app');
+const authService = require('../src/services/authService');
+const { localDb, isSupabaseConfigured } = require('../src/config/database');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
@@ -105,6 +107,10 @@ function uploadFileRequest(pathUrl, filePath, title, category, token) {
 }
 
 async function testRAGPipeline() {
+  if (isSupabaseConfigured()) {
+    throw new Error('This integration test uses the in-memory store and must not run against Supabase.');
+  }
+
   console.log('🚀 Starting Deep RAG Pipeline Audit & Integration Test on port', PORT);
   const server = app.listen(PORT);
 
@@ -130,15 +136,18 @@ Section 3: Scholarships & Financial Aid
   fs.writeFileSync(sampleDocPath, sampleText.trim());
 
   try {
-    // 1. Register Admin User
-    const adminReg = await makeJsonRequest('POST', '/api/auth/register', {
+    // 1. Seed a trusted administrator. Public registration intentionally only
+    // creates students, so tests must not rely on a client-provided admin role.
+    const admin = {
+      id: `admin-rag-${Date.now()}`,
       name: 'Dr. Smith Admin',
       email: 'admin_rag@college.edu',
-      password: 'adminpassword123',
-      role: 'admin'
-    });
-    const adminToken = adminReg.body?.data?.token;
-    console.log('1. Admin Registration:', adminToken ? 'PASSED ✅' : 'FAILED ❌');
+      role: 'admin',
+      created_at: new Date().toISOString()
+    };
+    localDb.users.push(admin);
+    const adminToken = authService.generateToken(admin);
+    console.log('1. Trusted Admin Fixture:', adminToken ? 'PASSED ✅' : 'FAILED ❌');
 
     // 2. Register Student User
     const studentReg = await makeJsonRequest('POST', '/api/auth/register', {
@@ -152,14 +161,18 @@ Section 3: Scholarships & Financial Aid
 
     // 3. Admin Uploads Document
     const uploadRes = await uploadFileRequest('/api/documents', sampleDocPath, 'Official Academic Handbook 2026', 'Fees', adminToken);
-    console.log('3. Admin Document Upload & Chunking:', uploadRes.statusCode === 201 && uploadRes.body.data?.document?.processing_status === 'PROCESSED' ? 'PASSED ✅' : 'FAILED ❌', uploadRes.body);
+    const uploadPassed = uploadRes.statusCode === 201 && uploadRes.body.data?.document?.processing_status === 'PROCESSED';
+    console.log('3. Admin Document Upload & Chunking:', uploadPassed ? 'PASSED ✅' : 'FAILED ❌');
+    if (!uploadPassed) throw new Error('Document upload or processing failed.');
 
     const docId = uploadRes.body?.data?.document?.id;
 
     // 4. Verify Document Inspection
     const inspectRes = await makeJsonRequest('GET', `/api/documents/${docId}`, null, { Authorization: `Bearer ${adminToken}` });
     const chunks = inspectRes.body?.data?.document?.chunks || [];
-    console.log('4. Document Chunk Inspection:', inspectRes.statusCode === 200 && chunks.length > 0 ? `PASSED ✅ (${chunks.length} chunks indexed)` : 'FAILED ❌');
+    const inspectionPassed = inspectRes.statusCode === 200 && chunks.length > 0;
+    console.log('4. Document Chunk Inspection:', inspectionPassed ? `PASSED ✅ (${chunks.length} chunks indexed)` : 'FAILED ❌');
+    if (!inspectionPassed) throw new Error('Indexed document chunks were not available.');
 
     // 5. Ask Grounded Question
     const q1Res = await makeJsonRequest('POST', '/api/chat', {
@@ -168,9 +181,16 @@ Section 3: Scholarships & Financial Aid
 
     const a1 = q1Res.body?.data?.message?.content || '';
     const sources1 = q1Res.body?.data?.message?.sources || [];
-    console.log('5. Grounded RAG Question Answered:', q1Res.statusCode === 200 && a1.includes('September 15') && sources1.length > 0 ? 'PASSED ✅' : 'FAILED ❌');
+    const groundedAnswerPassed = q1Res.statusCode === 200
+      && a1.includes('September 15')
+      && a1.includes('[Source: Official Academic Handbook 2026, p. 1]')
+      && a1.length < 300
+      && !a1.startsWith('Late fee payments')
+      && sources1.length > 0;
+    console.log('5. Grounded RAG Question Answered:', groundedAnswerPassed ? 'PASSED ✅' : 'FAILED ❌');
     console.log('   Answer Snippet:', a1.substring(0, 120) + '...');
     console.log('   Source Citation:', sources1[0]?.documentTitle, `(Relevance: ${sources1[0]?.relevanceScore})`);
+    if (!groundedAnswerPassed) throw new Error('Grounded answer did not include the expected answer and citation.');
 
     // 6. Ask Unknown Question
     const q2Res = await makeJsonRequest('POST', '/api/chat', {
@@ -178,12 +198,16 @@ Section 3: Scholarships & Financial Aid
     }, { Authorization: `Bearer ${studentToken}` });
 
     const a2 = q2Res.body?.data?.message?.content || '';
-    console.log('6. Unknown Question Safety Handling:', q2Res.statusCode === 200 && (a2.includes('could not find') || a2.includes('unavailable')) ? 'PASSED ✅' : 'FAILED ❌');
+    const unknownQuestionPassed = q2Res.statusCode === 200 && (a2.includes('could not find') || a2.includes('unavailable'));
+    console.log('6. Unknown Question Safety Handling:', unknownQuestionPassed ? 'PASSED ✅' : 'FAILED ❌');
     console.log('   Safety Response:', a2.substring(0, 120) + '...');
+    if (!unknownQuestionPassed) throw new Error('Unknown-question safety response failed.');
 
     // 7. Delete Document Cleanup
     const deleteRes = await makeJsonRequest('DELETE', `/api/documents/${docId}`, null, { Authorization: `Bearer ${adminToken}` });
-    console.log('7. Admin Delete Document & Vector Chunks Cleanup:', deleteRes.statusCode === 200 ? 'PASSED ✅' : 'FAILED ❌');
+    const cleanupPassed = deleteRes.statusCode === 200;
+    console.log('7. Admin Delete Document & Vector Chunks Cleanup:', cleanupPassed ? 'PASSED ✅' : 'FAILED ❌');
+    if (!cleanupPassed) throw new Error('Document cleanup failed.');
 
     console.log('\n🎉 RAG PIPELINE & DOCUMENT CHUNKING DEEP AUDIT SUCCESSFUL!\n');
   } catch (err) {

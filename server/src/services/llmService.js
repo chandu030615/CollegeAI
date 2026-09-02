@@ -98,10 +98,13 @@ function selectBestChunk(question, chunks) {
 
 function selectAnswerSentences(question, content) {
   const sentences = content
-    .replace(/\s+/g, ' ')
-    .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
-    ?.map(sentence => sentence.trim().replace(/^[•\-]\s*/, ''))
-    .filter(Boolean) || [];
+    .split(/\r?\n/)
+    .flatMap(line => line
+      .trim()
+      .replace(/^[•\-]\s*/, '')
+      .match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence && !/^section\s+\d+\s*:/i.test(sentence));
   const terms = question.toLowerCase().match(/[a-z0-9]+/g) || [];
   const meaningfulTerms = terms.filter(term => term.length > 2);
   const ranked = sentences
@@ -113,7 +116,12 @@ function selectAnswerSentences(question, content) {
       ), 0)
     }))
     .sort((a, b) => b.score - a.score || a.index - b.index);
-  const selected = ranked.filter(item => item.score > 0).slice(0, 2);
+  const matching = ranked.filter(item => item.score > 0);
+  const asksWhen = terms.includes('when');
+  const datedMatch = asksWhen && matching
+    .filter(item => /\b(before|after|on|by)\b|\b\d{1,2}[:/]\d{2}\b|\b\d{1,2}(st|nd|rd|th)\b/i.test(item.sentence))
+    .sort((a, b) => a.index - b.index)[0];
+  const selected = datedMatch ? [datedMatch] : matching.slice(0, 1);
 
   return (selected.length ? selected : ranked.slice(0, 1))
     .sort((a, b) => a.index - b.index)
