@@ -6,6 +6,18 @@ export default function MessageItem({ message }) {
   const isUser = message.role === 'user';
   const [feedback, setFeedback] = useState(null);
   const [copied, setCopied] = useState(false);
+  const displayedSources = message.sources?.reduce((sources, source) => {
+    const sourceKey = `${source.documentTitle}:${source.pageNumber}`;
+    const existingIndex = sources.findIndex(item => `${item.documentTitle}:${item.pageNumber}` === sourceKey);
+
+    if (existingIndex === -1) {
+      sources.push(source);
+    } else if ((source.relevanceScore || 0) > (sources[existingIndex].relevanceScore || 0)) {
+      sources[existingIndex] = source;
+    }
+
+    return sources;
+  }, []) || [];
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content);
@@ -57,14 +69,14 @@ export default function MessageItem({ message }) {
           </div>
 
           {/* Source Documents Grid if Assistant */}
-          {!isUser && message.sources && message.sources.length > 0 && (
+          {!isUser && displayedSources.length > 0 && (
             <div className="mt-4 pt-4 border-t border-gray-800 space-y-2">
               <div className="flex items-center space-x-2 text-xs font-semibold text-indigo-300">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Sources Used ({message.sources.length}):</span>
+                <span>Sources Used ({displayedSources.length}):</span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {message.sources.map((source, index) => (
+                {displayedSources.map((source, index) => (
                   <SourceCard key={index} source={source} />
                 ))}
               </div>
