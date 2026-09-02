@@ -34,7 +34,7 @@ export default function Home() {
             </Link>
 
             <Link
-              href="/login"
+              href="/admin/login"
               className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-gray-800/80 hover:bg-gray-800 text-gray-200 border border-gray-700/80 font-semibold flex items-center justify-center transition-all"
             >
               Admin Portal
