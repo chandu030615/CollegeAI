@@ -623,20 +623,64 @@ function selectAnswerSentences(question, content) {
   const dateQuestion = isDateQuestion(question);
   const paymentQuestion = isPaymentQuestion(question);
 
-  // Split by lines first because PDF extraction can put the date
-  // on its own line.
+  const asksPenalty = containsAny(lowerQuestion, [
+    'late',
+    'late payment',
+    'penalty',
+    'fine',
+    'consequence',
+    'consequences',
+    'what happens if',
+    'what happens when',
+    'what if i pay late',
+    'what happens if i pay late',
+    'pay late'
+  ]);
+
+  const asksAmount = containsAny(lowerQuestion, [
+    'how much',
+    'amount',
+    'cost',
+    'price',
+    'fee amount',
+    'tuition amount',
+    'semester fee amount',
+    'how much is the fee',
+    'what is the fee'
+  ]);
+
+  const asksMenu = containsAny(lowerQuestion, [
+    'menu',
+    'mess menu',
+    'food menu',
+    'meal menu',
+    'breakfast',
+    'lunch menu',
+    'dinner menu',
+    'mess food'
+  ]);
+
+  const asksSummary = containsAny(lowerQuestion, [
+    'what important',
+    'important information',
+    'what information',
+    'summarize',
+    'summary',
+    'overview',
+    'key information',
+    'academic information',
+    'important academic'
+  ]);
+
   const lines = normalizedContent
     .split(/\n+/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  // Create sentence candidates while preserving line boundaries.
   const candidates = [];
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex];
-
-    const fragments = line
+    const fragments = lines[lineIndex]
       .split(/(?<=[.!?])\s+/)
       .map((part) => part.trim())
       .filter(Boolean);
@@ -654,25 +698,278 @@ function selectAnswerSentences(question, content) {
   }
 
   /*
-   * ==========================================================
-   * DATE / DEADLINE QUESTIONS
-   * ==========================================================
-   *
-   * For questions such as:
-   *   "When is the tuition fee payment deadline?"
-   *
-   * An exact date is ALWAYS more important than:
-   *   - penalty information
-   *   - late payment information
-   *   - generic deadline statements
-   *
-   * Example:
-   *   The semester fee payment deadline is:
-   *   15 September 2026
-   *   Late fee payments incur a penalty of $50 per week.
-   *
-   * We must return the date, not the penalty.
+   * =========================================================
+   * 1. LATE PAYMENT / PENALTY QUESTIONS
+   * =========================================================
    */
+
+  if (asksPenalty) {
+    const penaltyCandidates = candidates.filter((candidate) => {
+      const lower = candidate.text.toLowerCase();
+
+      return (
+        containsAny(lower, PENALTY_WORDS) ||
+        containsAny(lower, [
+          'late payment',
+          'late fee',
+          'pay late',
+          'payment after',
+          'payment is late',
+          'paid late',
+          'late payments'
+        ])
+      );
+    });
+
+    if (penaltyCandidates.length > 0) {
+      penaltyCandidates.sort((a, b) => {
+        const score = (candidate) => {
+          const lower = candidate.text.toLowerCase();
+          let value = 0;
+
+          if (containsAny(lower, PENALTY_WORDS)) {
+            value += 100;
+          }
+
+          if (lower.includes('late payment')) {
+            value += 50;
+          }
+
+          if (
+            lower.includes('penalty') ||
+            lower.includes('fine') ||
+            lower.includes('late fee')
+          ) {
+            value += 50;
+          }
+
+          if (
+            lower.includes('may result') ||
+            lower.includes('will result') ||
+            lower.includes('subject to')
+          ) {
+            value += 25;
+          }
+
+          return value;
+        };
+
+        return score(b) - score(a);
+      });
+
+      return cleanDeadlineSentence(penaltyCandidates[0].text);
+    }
+
+    return '';
+  }
+
+  /*
+   * =========================================================
+   * 2. FEE AMOUNT / COST QUESTIONS
+   * =========================================================
+   */
+
+  if (asksAmount) {
+    const amountCandidates = candidates.filter((candidate) => {
+      const lower = candidate.text.toLowerCase();
+
+      const hasCurrencyAmount =
+        /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+          candidate.text
+        );
+
+      const hasWrittenAmount =
+        /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+          candidate.text
+        );
+
+      const hasFeeLanguage = containsAny(lower, [
+        'fee amount',
+        'tuition fee',
+        'semester fee',
+        'fee is',
+        'fee:',
+        'amount payable',
+        'amount is',
+        'tuition cost',
+        'semester cost'
+      ]);
+
+      return hasCurrencyAmount || hasWrittenAmount || hasFeeLanguage;
+    });
+
+    const usefulAmountCandidates = amountCandidates.filter((candidate) => {
+      const lower = candidate.text.toLowerCase();
+
+      const hasCurrencyAmount =
+        /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+          candidate.text
+        );
+
+      const hasWrittenAmount =
+        /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+          candidate.text
+        );
+
+      const hasActualAmount =
+        hasCurrencyAmount || hasWrittenAmount;
+
+      /*
+       * Do not treat a sentence merely mentioning
+       * "semester fee" + deadline as the fee amount.
+       */
+      const isOnlyDeadline =
+        containsAny(lower, DEADLINE_WORDS) &&
+        !hasActualAmount;
+
+      /*
+       * A sentence saying "semester fee payment deadline"
+       * without an amount is not an answer to "what is
+       * the semester fee?"
+       */
+      const isDeadlineIntroduction =
+        lower.includes('payment deadline') &&
+        !hasActualAmount;
+
+      return !isOnlyDeadline && !isDeadlineIntroduction;
+    });
+
+    if (usefulAmountCandidates.length > 0) {
+      usefulAmountCandidates.sort((a, b) => {
+        const score = (candidate) => {
+          const lower = candidate.text.toLowerCase();
+          let value = 0;
+
+          if (
+            /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+              candidate.text
+            )
+          ) {
+            value += 100;
+          }
+
+          if (
+            /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+              candidate.text
+            )
+          ) {
+            value += 100;
+          }
+
+          if (
+            containsAny(lower, [
+              'tuition fee',
+              'semester fee',
+              'fee amount'
+            ])
+          ) {
+            value += 30;
+          }
+
+          if (containsAny(lower, PAYMENT_WORDS)) {
+            value += 20;
+          }
+
+          return value;
+        };
+
+        return score(b) - score(a);
+      });
+
+      return cleanDeadlineSentence(usefulAmountCandidates[0].text);
+    }
+
+    /*
+     * No actual fee amount exists in the retrieved content.
+     * Returning an empty answer allows the grounded "not found"
+     * response to be used instead of an unrelated deadline.
+     */
+    return '';
+  }
+
+  /*
+   * =========================================================
+   * 3. HOSTEL / MESS MENU QUESTIONS
+   * =========================================================
+   */
+
+  if (asksMenu) {
+    const menuCandidates = candidates.filter((candidate) => {
+      const lower = candidate.text.toLowerCase();
+
+      return containsAny(lower, [
+        'menu',
+        'breakfast',
+        'lunch',
+        'dinner',
+        'meal',
+        'mess food',
+        'mess menu'
+      ]);
+    });
+
+    /*
+     * Explicitly reject generic hostel accommodation
+     * information. It is not a mess-menu answer.
+     */
+    const relevantMenuCandidates = menuCandidates.filter((candidate) => {
+      const lower = candidate.text.toLowerCase();
+
+      const isAccommodationOnly =
+        lower.includes('accommodation') &&
+        !lower.includes('menu') &&
+        !lower.includes('breakfast') &&
+        !lower.includes('lunch') &&
+        !lower.includes('dinner') &&
+        !lower.includes('meal');
+
+      return !isAccommodationOnly;
+    });
+
+    if (relevantMenuCandidates.length > 0) {
+      relevantMenuCandidates.sort((a, b) => {
+        const score = (candidate) => {
+          const lower = candidate.text.toLowerCase();
+          let value = 0;
+
+          if (lower.includes('menu')) {
+            value += 100;
+          }
+
+          if (lower.includes('breakfast')) {
+            value += 30;
+          }
+
+          if (lower.includes('lunch')) {
+            value += 30;
+          }
+
+          if (lower.includes('dinner')) {
+            value += 30;
+          }
+
+          if (lower.includes('mess')) {
+            value += 20;
+          }
+
+          return value;
+        };
+
+        return score(b) - score(a);
+      });
+
+      return cleanDeadlineSentence(relevantMenuCandidates[0].text);
+    }
+
+    return '';
+  }
+
+  /*
+   * =========================================================
+   * 4. DATE / DEADLINE QUESTIONS
+   * =========================================================
+   */
+
   if (dateQuestion) {
     const dateCandidates = candidates
       .map((candidate) => {
@@ -704,10 +1001,6 @@ function selectAnswerSentences(question, content) {
       .filter(Boolean);
 
     if (dateCandidates.length > 0) {
-      /*
-       * Prefer dates appearing in sentences that explicitly
-       * mention the deadline/payment.
-       */
       dateCandidates.sort((a, b) => {
         const score = (candidate) => {
           let value = 0;
@@ -721,7 +1014,8 @@ function selectAnswerSentences(question, content) {
           }
 
           /*
-           * Penalty information must NOT win over the deadline.
+           * Strongly reject penalty dates for a simple
+           * deadline question.
            */
           if (candidate.hasPenaltyLanguage) {
             value -= 1000;
@@ -735,19 +1029,8 @@ function selectAnswerSentences(question, content) {
 
       const selected = dateCandidates[0];
 
-      /*
-       * If the selected date sentence also contains penalty
-       * information, keep only the portion through the date.
-       */
       let answer = cleanDeadlineSentence(selected.text);
 
-      /*
-       * Handle PDF extraction where the deadline label is on
-       * the previous line:
-       *
-       *   Semester Fee Payment Deadline:
-       *   September 15th, 2026
-       */
       const previousLineIndex = selected.lineIndex - 1;
 
       if (previousLineIndex >= 0) {
@@ -772,10 +1055,6 @@ function selectAnswerSentences(question, content) {
       return cleanDeadlineSentence(answer);
     }
 
-    /*
-     * If the chunk has no recognizable date, do NOT return
-     * penalty information for a date/deadline question.
-     */
     const deadlineCandidate = candidates.find((candidate) => {
       const lower = candidate.text.toLowerCase();
 
@@ -793,10 +1072,54 @@ function selectAnswerSentences(question, content) {
   }
 
   /*
-   * ==========================================================
-   * NORMAL QUESTIONS
-   * ==========================================================
+   * =========================================================
+   * 5. BROAD / SUMMARY QUESTIONS
+   * =========================================================
+   *
+   * The single-sentence fallback should NOT answer broad
+   * summary questions with an arbitrary sentence.
+   *
+   * Returning empty tells generateAnswer() to use the
+   * grounded LLM summary path if available.
    */
+
+  if (asksSummary) {
+    const usefulCandidates = candidates.filter((candidate) => {
+      const lower = candidate.text.toLowerCase();
+
+      const isDisclaimer =
+        containsAny(lower, [
+          'sample data',
+          'not official information',
+          'not official information from any real college',
+          'demo data',
+          'demonstration data'
+        ]);
+
+      return !isDisclaimer;
+    });
+
+    if (usefulCandidates.length === 0) {
+      return '';
+    }
+
+    /*
+     * Do not force a random single sentence for a summary
+     * question. Let the grounded generation path summarize
+     * the retrieved evidence.
+     */
+    return '';
+  }
+
+  /*
+   * =========================================================
+   * 6. NORMAL QUESTIONS
+   * =========================================================
+   */
+
+  const questionWords = lowerQuestion
+    .split(/\s+/)
+    .filter((word) => word.length >= 4);
 
   const scoredCandidates = candidates.map((candidate, index) => {
     const text = candidate.text;
@@ -804,12 +1127,15 @@ function selectAnswerSentences(question, content) {
 
     let score = 0;
 
-    if (paymentQuestion && containsAny(lower, PAYMENT_WORDS)) {
+    if (
+      paymentQuestion &&
+      containsAny(lower, PAYMENT_WORDS)
+    ) {
       score += 50;
     }
 
     if (containsAny(lower, DEADLINE_WORDS)) {
-      score += 30;
+      score += 20;
     }
 
     if (containsAny(lower, PENALTY_WORDS)) {
@@ -817,11 +1143,20 @@ function selectAnswerSentences(question, content) {
     }
 
     /*
-     * Reward overlap between question keywords and sentence.
+     * Never allow document disclaimers to win merely because
+     * they share generic words with the question.
      */
-    const questionWords = lowerQuestion
-      .split(/\s+/)
-      .filter((word) => word.length >= 4);
+    if (
+      containsAny(lower, [
+        'sample data',
+        'not official information',
+        'not official information from any real college',
+        'demo data',
+        'demonstration data'
+      ])
+    ) {
+      score -= 100;
+    }
 
     for (const word of questionWords) {
       if (lower.includes(word)) {
