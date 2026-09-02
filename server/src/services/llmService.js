@@ -19,7 +19,10 @@ RULES:
 7. Always cite the document title and page number when available.
 8. For deadline/date questions, explicitly include the exact date found in the context.
 9. Do not replace an exact date with vague wording such as "before the deadline".
-10. Do not answer a deadline question using only late-payment, penalty, or fine information.`;
+10. Do not answer a deadline question using only late-payment, penalty, or fine information.
+11. For broad or summary questions, summarize multiple relevant facts from the supplied context instead of selecting one arbitrary sentence.
+12. Ignore disclaimer text such as "sample data" or "not official information" when the user is asking for substantive college information.
+13. Never treat unrelated retrieved text as an answer merely because it has high vector similarity.`;
 
 // ============================================================
 // DATE / DEADLINE CONSTANTS
@@ -75,6 +78,14 @@ const PENALTY_WORDS = [
   'after the deadline'
 ];
 
+const DISCLAIMER_WORDS = [
+  'sample data',
+  'not official information',
+  'not official information from any real college',
+  'demo data',
+  'demonstration data'
+];
+
 // ============================================================
 // TEXT HELPERS
 // ============================================================
@@ -90,7 +101,7 @@ function normalizeText(value) {
 function containsAny(text, words) {
   const normalized = String(text || '').toLowerCase();
 
-  return words.some(word =>
+  return words.some((word) =>
     normalized.includes(word.toLowerCase())
   );
 }
@@ -124,8 +135,27 @@ function isPaymentQuestion(question) {
   );
 }
 
+function isSummaryQuestion(question) {
+  const lower = normalizeText(question).toLowerCase();
+
+  return containsAny(lower, [
+    'what important',
+    'important information',
+    'what information',
+    'summarize',
+    'summary',
+    'overview',
+    'key information',
+    'academic information',
+    'important academic',
+    'tell me about the handbook',
+    'what does the handbook say',
+    'what are the important points'
+  ]);
+}
+
 // ============================================================
-// CLEAN DEADLINE ANSWER
+// CLEAN ANSWER
 // ============================================================
 
 function cleanDeadlineSentence(sentence) {
@@ -134,17 +164,6 @@ function cleanDeadlineSentence(sentence) {
   if (!result) {
     return '';
   }
-
-  /*
-   * Example:
-   *
-   * "The fee payment deadline is September 15, 2026.
-   *  Late payment will incur a penalty."
-   *
-   * becomes:
-   *
-   * "The fee payment deadline is September 15, 2026."
-   */
 
   const date = findDate(result);
 
@@ -173,196 +192,7 @@ function cleanDeadlineSentence(sentence) {
 }
 
 // ============================================================
-// GENERATE ANSWER
-// ============================================================
-
-const generateAnswer = async (
-  question,
-  contextChunks = [],
-  onToken = null
-) => {
-  const hasContext =
-    Array.isArray(contextChunks) &&
-    contextChunks.length > 0;
-
-  let contextText = '';
-
-  if (hasContext) {
-    contextText = contextChunks
-      .map((chunk, idx) => {
-        const pageInfo = chunk.pageNumber
-          ? ` (Page ${chunk.pageNumber})`
-          : '';
-
-        return `--- CONTEXT CHUNK ${idx + 1} [Source: "${chunk.documentTitle}"${pageInfo}] ---
-${chunk.content}`;
-      })
-      .join('\n\n');
-  }
-
-  // ==========================================================
-  // DETERMINISTIC DATE / DEADLINE HANDLING
-  // ==========================================================
-
-  /*
-   * Date/deadline questions are handled deterministically
-   * before OpenAI.
-   *
-   * This guarantees that exact dates present in official
-   * documents are not replaced by vague wording.
-   */
-
-  if (
-    hasContext &&
-    isDateQuestion(question)
-  ) {
-    const bestChunk = selectBestChunk(
-      question,
-      contextChunks
-    );
-
-    if (bestChunk) {
-      const answerText = selectAnswerSentences(
-        question,
-        bestChunk.content
-      );
-
-      if (answerText) {
-        const pageLabel = bestChunk.pageNumber
-          ? `, p. ${bestChunk.pageNumber}`
-          : '';
-
-        const synthesized =
-          `${answerText} [Source: ${bestChunk.documentTitle}${pageLabel}]`;
-
-        await streamText(
-          synthesized,
-          onToken,
-          25
-        );
-
-        return synthesized;
-      }
-    }
-  }
-
-  // ==========================================================
-  // OPENAI LLM
-  // ==========================================================
-
-  const apiKey = env.llmApiKey;
-
-  if (
-    apiKey &&
-    apiKey.startsWith('sk-')
-  ) {
-    try {
-      const promptMessages = [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: `Retrieved College Context:
-${contextText || 'NO RELEVANT CONTEXT FOUND IN KNOWLEDGE BASE.'}
-
-Student Question:
-${question}`
-        }
-      ];
-
-      const aiResponse = await fetchOpenAIChat(
-        promptMessages,
-        apiKey
-      );
-
-      if (aiResponse) {
-        return aiResponse;
-      }
-    } catch (err) {
-      console.warn(
-        '[LLMService] OpenAI LLM API call error, using grounded context generator:',
-        err.message
-      );
-    }
-  }
-
-  // ==========================================================
-  // NO CONTEXT SAFETY FALLBACK
-  // ==========================================================
-
-  if (!hasContext) {
-    const fallbackMsg =
-      'I could not find sufficient information regarding your query in the available official college knowledge base. Please check back after administrators upload relevant documents or contact your department administration directly.';
-
-    await streamText(
-      fallbackMsg,
-      onToken,
-      20
-    );
-
-    return fallbackMsg;
-  }
-
-  // ==========================================================
-  // GROUNDED FALLBACK
-  // ==========================================================
-
-  const bestChunk = selectBestChunk(
-    question,
-    contextChunks
-  );
-
-  if (!bestChunk) {
-    const fallbackMsg =
-      'I could not find sufficient information regarding your query in the available official college knowledge base.';
-
-    await streamText(
-      fallbackMsg,
-      onToken,
-      20
-    );
-
-    return fallbackMsg;
-  }
-
-  const answerText = selectAnswerSentences(
-    question,
-    bestChunk.content
-  );
-
-  if (!answerText) {
-    const fallbackMsg =
-      'I could not find sufficient information regarding your query in the available official college knowledge base.';
-
-    await streamText(
-      fallbackMsg,
-      onToken,
-      20
-    );
-
-    return fallbackMsg;
-  }
-
-  const pageLabel = bestChunk.pageNumber
-    ? `, p. ${bestChunk.pageNumber}`
-    : '';
-
-  const synthesized =
-    `${answerText} [Source: ${bestChunk.documentTitle}${pageLabel}]`;
-
-  await streamText(
-    synthesized,
-    onToken,
-    25
-  );
-
-  return synthesized;
-};
-
-// ============================================================
-// LIGHTWEIGHT STREAMING FALLBACK
+// STREAMING FALLBACK
 // ============================================================
 
 async function streamText(
@@ -381,7 +211,7 @@ async function streamText(
     onToken(chunk);
 
     if (delay > 0) {
-      await new Promise(resolve =>
+      await new Promise((resolve) =>
         setTimeout(resolve, delay)
       );
     }
@@ -440,7 +270,7 @@ function selectBestChunk(
 
   const meaningfulTerms =
     terms.filter(
-      term =>
+      (term) =>
         term.length > 2 &&
         !stopWords.has(term)
     );
@@ -450,6 +280,37 @@ function selectBestChunk(
 
   const paymentQuestion =
     isPaymentQuestion(question);
+
+  const asksPenalty =
+    containsAny(normalizedQuestion, [
+      'late',
+      'penalty',
+      'fine',
+      'consequence',
+      'what happens if'
+    ]);
+
+  const asksAmount =
+    containsAny(normalizedQuestion, [
+      'how much',
+      'amount',
+      'cost',
+      'price',
+      'fee amount',
+      'tuition amount',
+      'semester fee amount'
+    ]);
+
+  const asksMenu =
+    containsAny(normalizedQuestion, [
+      'menu',
+      'mess menu',
+      'food menu',
+      'meal menu',
+      'breakfast',
+      'lunch menu',
+      'dinner menu'
+    ]);
 
   const scored = chunks.map(
     (chunk, index) => {
@@ -493,6 +354,30 @@ function selectBestChunk(
           PENALTY_WORDS
         );
 
+      const hasActualAmount =
+        /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+          content
+        ) ||
+        /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+          content
+        );
+
+      const hasMenuContent =
+        containsAny(lowerContent, [
+          'menu',
+          'breakfast',
+          'lunch',
+          'dinner',
+          'meal',
+          'mess'
+        ]);
+
+      const hasDisclaimer =
+        containsAny(
+          lowerContent,
+          DISCLAIMER_WORDS
+        );
+
       let score =
         Number(
           chunk.similarity ||
@@ -523,19 +408,53 @@ function selectBestChunk(
         score += 30;
       }
 
-      /*
-       * Penalize chunks that only discuss late fees,
-       * penalties, or fines.
-       *
-       * A chunk containing the actual date is still allowed
-       * because the exact date has much higher priority.
-       */
+      if (
+        asksPenalty &&
+        hasPenaltyContent
+      ) {
+        score += 100;
+      }
+
+      if (
+        asksAmount &&
+        hasActualAmount
+      ) {
+        score += 100;
+      }
+
+      if (
+        asksMenu &&
+        hasMenuContent
+      ) {
+        score += 100;
+      }
+
+      if (
+        asksMenu &&
+        lowerContent.includes('accommodation') &&
+        !hasMenuContent
+      ) {
+        score -= 100;
+      }
+
+      if (
+        asksAmount &&
+        hasDeadlineKeyword &&
+        !hasActualAmount
+      ) {
+        score -= 100;
+      }
+
       if (
         dateQuestion &&
         hasPenaltyContent &&
         !hasExactDate
       ) {
         score -= 40;
+      }
+
+      if (hasDisclaimer) {
+        score -= 100;
       }
 
       return {
@@ -546,6 +465,9 @@ function selectBestChunk(
         hasDeadlineKeyword,
         hasPaymentKeyword,
         hasPenaltyContent,
+        hasActualAmount,
+        hasMenuContent,
+        hasDisclaimer,
         keywordScore
       };
     }
@@ -558,39 +480,104 @@ function selectBestChunk(
   if (dateQuestion) {
     const datedChunks =
       scored.filter(
-        item => item.hasExactDate
+        (item) => item.hasExactDate
       );
 
     if (datedChunks.length > 0) {
       datedChunks.sort(
         (a, b) =>
-          // 1. Exact date is mandatory priority.
           Number(b.hasExactDate) -
           Number(a.hasExactDate) ||
 
-          // 2. Explicit deadline wording.
           Number(b.hasDeadlineKeyword) -
           Number(a.hasDeadlineKeyword) ||
 
-          // 3. Fee/payment context.
           Number(b.hasPaymentKeyword) -
           Number(a.hasPaymentKeyword) ||
 
-          // 4. Avoid penalty-heavy chunks when possible.
           Number(a.hasPenaltyContent) -
           Number(b.hasPenaltyContent) ||
 
-          // 5. Keyword relevance.
           b.keywordScore -
           a.keywordScore ||
 
-          // 6. Preserve document order.
           a.index -
           b.index
       );
 
       return datedChunks[0].chunk;
     }
+  }
+
+  // ==========================================================
+  // PENALTY QUESTION CHUNK PRIORITY
+  // ==========================================================
+
+  if (asksPenalty) {
+    const penaltyChunks =
+      scored.filter(
+        (item) => item.hasPenaltyContent
+      );
+
+    if (penaltyChunks.length > 0) {
+      penaltyChunks.sort(
+        (a, b) =>
+          b.score - a.score ||
+          a.index - b.index
+      );
+
+      return penaltyChunks[0].chunk;
+    }
+  }
+
+  // ==========================================================
+  // AMOUNT QUESTION CHUNK PRIORITY
+  // ==========================================================
+
+  if (asksAmount) {
+    const amountChunks =
+      scored.filter(
+        (item) => item.hasActualAmount
+      );
+
+    if (amountChunks.length > 0) {
+      amountChunks.sort(
+        (a, b) =>
+          b.score - a.score ||
+          a.index - b.index
+      );
+
+      return amountChunks[0].chunk;
+    }
+  }
+
+  // ==========================================================
+  // MENU QUESTION CHUNK PRIORITY
+  // ==========================================================
+
+  if (asksMenu) {
+    const menuChunks =
+      scored.filter(
+        (item) =>
+          item.hasMenuContent &&
+          !(
+            item.chunk.content || ''
+          )
+            .toLowerCase()
+            .includes('accommodation')
+      );
+
+    if (menuChunks.length > 0) {
+      menuChunks.sort(
+        (a, b) =>
+          b.score - a.score ||
+          a.index - b.index
+      );
+
+      return menuChunks[0].chunk;
+    }
+
+    return null;
   }
 
   // ==========================================================
@@ -612,78 +599,87 @@ function selectBestChunk(
 // SELECT CONCISE ANSWER SENTENCES
 // ============================================================
 
-function selectAnswerSentences(question, content) {
+function selectAnswerSentences(
+  question,
+  content
+) {
   if (!content) {
     return '';
   }
 
-  const normalizedContent = normalizeText(content);
-  const lowerQuestion = normalizeText(question).toLowerCase();
+  const normalizedContent =
+    normalizeText(content);
 
-  const dateQuestion = isDateQuestion(question);
-  const paymentQuestion = isPaymentQuestion(question);
+  const lowerQuestion =
+    normalizeText(question).toLowerCase();
 
-  const asksPenalty = containsAny(lowerQuestion, [
-    'late',
-    'late payment',
-    'penalty',
-    'fine',
-    'consequence',
-    'consequences',
-    'what happens if',
-    'what happens when',
-    'what if i pay late',
-    'what happens if i pay late',
-    'pay late'
-  ]);
+  const dateQuestion =
+    isDateQuestion(question);
 
-  const asksAmount = containsAny(lowerQuestion, [
-    'how much',
-    'amount',
-    'cost',
-    'price',
-    'fee amount',
-    'tuition amount',
-    'semester fee amount',
-    'how much is the fee',
-    'what is the fee'
-  ]);
+  const paymentQuestion =
+    isPaymentQuestion(question);
 
-  const asksMenu = containsAny(lowerQuestion, [
-    'menu',
-    'mess menu',
-    'food menu',
-    'meal menu',
-    'breakfast',
-    'lunch menu',
-    'dinner menu',
-    'mess food'
-  ]);
+  const asksPenalty =
+    containsAny(lowerQuestion, [
+      'late',
+      'late payment',
+      'penalty',
+      'fine',
+      'consequence',
+      'consequences',
+      'what happens if',
+      'what happens when',
+      'what if i pay late',
+      'what happens if i pay late',
+      'pay late'
+    ]);
 
-  const asksSummary = containsAny(lowerQuestion, [
-    'what important',
-    'important information',
-    'what information',
-    'summarize',
-    'summary',
-    'overview',
-    'key information',
-    'academic information',
-    'important academic'
-  ]);
+  const asksAmount =
+    containsAny(lowerQuestion, [
+      'how much',
+      'amount',
+      'cost',
+      'price',
+      'fee amount',
+      'tuition amount',
+      'semester fee amount',
+      'how much is the fee',
+      'what is the fee'
+    ]);
 
-  const lines = normalizedContent
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const asksMenu =
+    containsAny(lowerQuestion, [
+      'menu',
+      'mess menu',
+      'food menu',
+      'meal menu',
+      'breakfast',
+      'lunch menu',
+      'dinner menu',
+      'mess food'
+    ]);
+
+  const asksSummary =
+    isSummaryQuestion(question);
+
+  const lines =
+    normalizedContent
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
 
   const candidates = [];
 
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const fragments = lines[lineIndex]
-      .split(/(?<=[.!?])\s+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
+  for (
+    let lineIndex = 0;
+    lineIndex < lines.length;
+    lineIndex += 1
+  ) {
+    const fragments =
+      lines[lineIndex]
+        .split(/(?<=[.!?])\s+/)
+        .map((part) => part.trim())
+        .filter(Boolean);
 
     for (const fragment of fragments) {
       candidates.push({
@@ -697,41 +693,53 @@ function selectAnswerSentences(question, content) {
     return '';
   }
 
-  /*
-   * =========================================================
-   * 1. LATE PAYMENT / PENALTY QUESTIONS
-   * =========================================================
-   */
+  // ==========================================================
+  // 1. PENALTY / LATE PAYMENT
+  // ==========================================================
 
   if (asksPenalty) {
-    const penaltyCandidates = candidates.filter((candidate) => {
-      const lower = candidate.text.toLowerCase();
+    const penaltyCandidates =
+      candidates.filter((candidate) => {
+        const lower =
+          candidate.text.toLowerCase();
 
-      return (
-        containsAny(lower, PENALTY_WORDS) ||
-        containsAny(lower, [
-          'late payment',
-          'late fee',
-          'pay late',
-          'payment after',
-          'payment is late',
-          'paid late',
-          'late payments'
-        ])
-      );
-    });
+        return (
+          containsAny(
+            lower,
+            PENALTY_WORDS
+          ) ||
+          containsAny(lower, [
+            'late payment',
+            'late fee',
+            'pay late',
+            'payment after',
+            'payment is late',
+            'paid late',
+            'late payments'
+          ])
+        );
+      });
 
     if (penaltyCandidates.length > 0) {
       penaltyCandidates.sort((a, b) => {
         const score = (candidate) => {
-          const lower = candidate.text.toLowerCase();
+          const lower =
+            candidate.text.toLowerCase();
+
           let value = 0;
 
-          if (containsAny(lower, PENALTY_WORDS)) {
+          if (
+            containsAny(
+              lower,
+              PENALTY_WORDS
+            )
+          ) {
             value += 100;
           }
 
-          if (lower.includes('late payment')) {
+          if (
+            lower.includes('late payment')
+          ) {
             value += 50;
           }
 
@@ -757,436 +765,1042 @@ function selectAnswerSentences(question, content) {
         return score(b) - score(a);
       });
 
-      return cleanDeadlineSentence(penaltyCandidates[0].text);
+      return cleanDeadlineSentence(
+        penaltyCandidates[0].text
+      );
     }
 
     return '';
   }
 
-  /*
-   * =========================================================
-   * 2. FEE AMOUNT / COST QUESTIONS
-   * =========================================================
-   */
+  // ==========================================================
+  // 2. FEE AMOUNT / COST
+  // ==========================================================
 
   if (asksAmount) {
-    const amountCandidates = candidates.filter((candidate) => {
-      const lower = candidate.text.toLowerCase();
+    const amountCandidates =
+      candidates.filter((candidate) => {
+        const lower =
+          candidate.text.toLowerCase();
 
-      const hasCurrencyAmount =
-        /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
-          candidate.text
+        const hasCurrencyAmount =
+          /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+            candidate.text
+          );
+
+        const hasWrittenAmount =
+          /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+            candidate.text
+          );
+
+        const hasFeeLanguage =
+          containsAny(lower, [
+            'fee amount',
+            'tuition fee',
+            'semester fee',
+            'fee is',
+            'fee:',
+            'amount payable',
+            'amount is',
+            'tuition cost',
+            'semester cost'
+          ]);
+
+        return (
+          hasCurrencyAmount ||
+          hasWrittenAmount ||
+          hasFeeLanguage
         );
-
-      const hasWrittenAmount =
-        /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
-          candidate.text
-        );
-
-      const hasFeeLanguage = containsAny(lower, [
-        'fee amount',
-        'tuition fee',
-        'semester fee',
-        'fee is',
-        'fee:',
-        'amount payable',
-        'amount is',
-        'tuition cost',
-        'semester cost'
-      ]);
-
-      return hasCurrencyAmount || hasWrittenAmount || hasFeeLanguage;
-    });
-
-    const usefulAmountCandidates = amountCandidates.filter((candidate) => {
-      const lower = candidate.text.toLowerCase();
-
-      const hasCurrencyAmount =
-        /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
-          candidate.text
-        );
-
-      const hasWrittenAmount =
-        /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
-          candidate.text
-        );
-
-      const hasActualAmount =
-        hasCurrencyAmount || hasWrittenAmount;
-
-      /*
-       * Do not treat a sentence merely mentioning
-       * "semester fee" + deadline as the fee amount.
-       */
-      const isOnlyDeadline =
-        containsAny(lower, DEADLINE_WORDS) &&
-        !hasActualAmount;
-
-      /*
-       * A sentence saying "semester fee payment deadline"
-       * without an amount is not an answer to "what is
-       * the semester fee?"
-       */
-      const isDeadlineIntroduction =
-        lower.includes('payment deadline') &&
-        !hasActualAmount;
-
-      return !isOnlyDeadline && !isDeadlineIntroduction;
-    });
-
-    if (usefulAmountCandidates.length > 0) {
-      usefulAmountCandidates.sort((a, b) => {
-        const score = (candidate) => {
-          const lower = candidate.text.toLowerCase();
-          let value = 0;
-
-          if (
-            /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
-              candidate.text
-            )
-          ) {
-            value += 100;
-          }
-
-          if (
-            /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
-              candidate.text
-            )
-          ) {
-            value += 100;
-          }
-
-          if (
-            containsAny(lower, [
-              'tuition fee',
-              'semester fee',
-              'fee amount'
-            ])
-          ) {
-            value += 30;
-          }
-
-          if (containsAny(lower, PAYMENT_WORDS)) {
-            value += 20;
-          }
-
-          return value;
-        };
-
-        return score(b) - score(a);
       });
 
-      return cleanDeadlineSentence(usefulAmountCandidates[0].text);
+    const usefulAmountCandidates =
+      amountCandidates.filter((candidate) => {
+        const lower =
+          candidate.text.toLowerCase();
+
+        const hasCurrencyAmount =
+          /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+            candidate.text
+          );
+
+        const hasWrittenAmount =
+          /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+            candidate.text
+          );
+
+        const hasActualAmount =
+          hasCurrencyAmount ||
+          hasWrittenAmount;
+
+        const isOnlyDeadline =
+          containsAny(
+            lower,
+            DEADLINE_WORDS
+          ) &&
+          !hasActualAmount;
+
+        const isDeadlineIntroduction =
+          lower.includes(
+            'payment deadline'
+          ) &&
+          !hasActualAmount;
+
+        return (
+          !isOnlyDeadline &&
+          !isDeadlineIntroduction
+        );
+      });
+
+    if (
+      usefulAmountCandidates.length > 0
+    ) {
+      usefulAmountCandidates.sort(
+        (a, b) => {
+          const score = (candidate) => {
+            const lower =
+              candidate.text.toLowerCase();
+
+            let value = 0;
+
+            if (
+              /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+                candidate.text
+              )
+            ) {
+              value += 100;
+            }
+
+            if (
+              /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+                candidate.text
+              )
+            ) {
+              value += 100;
+            }
+
+            if (
+              containsAny(lower, [
+                'tuition fee',
+                'semester fee',
+                'fee amount'
+              ])
+            ) {
+              value += 30;
+            }
+
+            if (
+              containsAny(
+                lower,
+                PAYMENT_WORDS
+              )
+            ) {
+              value += 20;
+            }
+
+            return value;
+          };
+
+          return score(b) - score(a);
+        }
+      );
+
+      return cleanDeadlineSentence(
+        usefulAmountCandidates[0].text
+      );
     }
 
-    /*
-     * No actual fee amount exists in the retrieved content.
-     * Returning an empty answer allows the grounded "not found"
-     * response to be used instead of an unrelated deadline.
-     */
     return '';
   }
 
-  /*
-   * =========================================================
-   * 3. HOSTEL / MESS MENU QUESTIONS
-   * =========================================================
-   */
+  // ==========================================================
+  // 3. HOSTEL / MESS MENU
+  // ==========================================================
 
   if (asksMenu) {
-    const menuCandidates = candidates.filter((candidate) => {
-      const lower = candidate.text.toLowerCase();
+    const menuCandidates =
+      candidates.filter((candidate) => {
+        const lower =
+          candidate.text.toLowerCase();
 
-      return containsAny(lower, [
-        'menu',
-        'breakfast',
-        'lunch',
-        'dinner',
-        'meal',
-        'mess food',
-        'mess menu'
-      ]);
-    });
-
-    /*
-     * Explicitly reject generic hostel accommodation
-     * information. It is not a mess-menu answer.
-     */
-    const relevantMenuCandidates = menuCandidates.filter((candidate) => {
-      const lower = candidate.text.toLowerCase();
-
-      const isAccommodationOnly =
-        lower.includes('accommodation') &&
-        !lower.includes('menu') &&
-        !lower.includes('breakfast') &&
-        !lower.includes('lunch') &&
-        !lower.includes('dinner') &&
-        !lower.includes('meal');
-
-      return !isAccommodationOnly;
-    });
-
-    if (relevantMenuCandidates.length > 0) {
-      relevantMenuCandidates.sort((a, b) => {
-        const score = (candidate) => {
-          const lower = candidate.text.toLowerCase();
-          let value = 0;
-
-          if (lower.includes('menu')) {
-            value += 100;
-          }
-
-          if (lower.includes('breakfast')) {
-            value += 30;
-          }
-
-          if (lower.includes('lunch')) {
-            value += 30;
-          }
-
-          if (lower.includes('dinner')) {
-            value += 30;
-          }
-
-          if (lower.includes('mess')) {
-            value += 20;
-          }
-
-          return value;
-        };
-
-        return score(b) - score(a);
+        return containsAny(lower, [
+          'menu',
+          'breakfast',
+          'lunch',
+          'dinner',
+          'meal',
+          'mess food',
+          'mess menu'
+        ]);
       });
 
-      return cleanDeadlineSentence(relevantMenuCandidates[0].text);
+    const relevantMenuCandidates =
+      menuCandidates.filter((candidate) => {
+        const lower =
+          candidate.text.toLowerCase();
+
+        const isAccommodationOnly =
+          lower.includes('accommodation') &&
+          !lower.includes('menu') &&
+          !lower.includes('breakfast') &&
+          !lower.includes('lunch') &&
+          !lower.includes('dinner') &&
+          !lower.includes('meal');
+
+        return !isAccommodationOnly;
+      });
+
+    if (
+      relevantMenuCandidates.length > 0
+    ) {
+      relevantMenuCandidates.sort(
+        (a, b) => {
+          const score = (candidate) => {
+            const lower =
+              candidate.text.toLowerCase();
+
+            let value = 0;
+
+            if (
+              lower.includes('menu')
+            ) {
+              value += 100;
+            }
+
+            if (
+              lower.includes('breakfast')
+            ) {
+              value += 30;
+            }
+
+            if (
+              lower.includes('lunch')
+            ) {
+              value += 30;
+            }
+
+            if (
+              lower.includes('dinner')
+            ) {
+              value += 30;
+            }
+
+            if (
+              lower.includes('mess')
+            ) {
+              value += 20;
+            }
+
+            return value;
+          };
+
+          return score(b) - score(a);
+        }
+      );
+
+      return cleanDeadlineSentence(
+        relevantMenuCandidates[0].text
+      );
     }
 
     return '';
   }
 
-  /*
-   * =========================================================
-   * 4. DATE / DEADLINE QUESTIONS
-   * =========================================================
-   */
+  // ==========================================================
+  // 4. DATE / DEADLINE
+  // ==========================================================
 
   if (dateQuestion) {
-    const dateCandidates = candidates
-      .map((candidate) => {
-        const date = findDate(candidate.text);
+    const dateCandidates =
+      candidates
+        .map((candidate) => {
+          const date =
+            findDate(candidate.text);
 
-        if (!date) {
-          return null;
-        }
+          if (!date) {
+            return null;
+          }
 
-        const lower = candidate.text.toLowerCase();
+          const lower =
+            candidate.text.toLowerCase();
 
-        const hasDeadlineLanguage =
-          containsAny(lower, DEADLINE_WORDS);
-
-        const hasPaymentLanguage =
-          containsAny(lower, PAYMENT_WORDS);
-
-        const hasPenaltyLanguage =
-          containsAny(lower, PENALTY_WORDS);
-
-        return {
-          ...candidate,
-          date,
-          hasDeadlineLanguage,
-          hasPaymentLanguage,
-          hasPenaltyLanguage
-        };
-      })
-      .filter(Boolean);
+          return {
+            ...candidate,
+            date,
+            hasDeadlineLanguage:
+              containsAny(
+                lower,
+                DEADLINE_WORDS
+              ),
+            hasPaymentLanguage:
+              containsAny(
+                lower,
+                PAYMENT_WORDS
+              ),
+            hasPenaltyLanguage:
+              containsAny(
+                lower,
+                PENALTY_WORDS
+              )
+          };
+        })
+        .filter(Boolean);
 
     if (dateCandidates.length > 0) {
-      dateCandidates.sort((a, b) => {
-        const score = (candidate) => {
-          let value = 0;
+      dateCandidates.sort(
+        (a, b) => {
+          const score = (candidate) => {
+            let value = 0;
 
-          if (candidate.hasDeadlineLanguage) {
-            value += 100;
-          }
+            if (
+              candidate.hasDeadlineLanguage
+            ) {
+              value += 100;
+            }
 
-          if (candidate.hasPaymentLanguage) {
-            value += 50;
-          }
+            if (
+              candidate.hasPaymentLanguage
+            ) {
+              value += 50;
+            }
 
-          /*
-           * Strongly reject penalty dates for a simple
-           * deadline question.
-           */
-          if (candidate.hasPenaltyLanguage) {
-            value -= 1000;
-          }
+            if (
+              candidate.hasPenaltyLanguage
+            ) {
+              value -= 1000;
+            }
 
-          return value;
-        };
+            return value;
+          };
 
-        return score(b) - score(a);
-      });
+          return score(b) - score(a);
+        }
+      );
 
-      const selected = dateCandidates[0];
+      const selected =
+        dateCandidates[0];
 
-      let answer = cleanDeadlineSentence(selected.text);
+      let answer =
+        cleanDeadlineSentence(
+          selected.text
+        );
 
-      const previousLineIndex = selected.lineIndex - 1;
+      const previousLineIndex =
+        selected.lineIndex - 1;
 
-      if (previousLineIndex >= 0) {
-        const previous = lines[previousLineIndex].trim();
-        const previousLower = previous.toLowerCase();
+      if (
+        previousLineIndex >= 0
+      ) {
+        const previous =
+          lines[previousLineIndex].trim();
+
+        const previousLower =
+          previous.toLowerCase();
 
         const looksLikeDeadlineLabel =
           previous.endsWith(':') ||
-          containsAny(previousLower, DEADLINE_WORDS);
+          containsAny(
+            previousLower,
+            DEADLINE_WORDS
+          );
 
-        const previousHasNoDate = !findDate(previous);
+        const previousHasNoDate =
+          !findDate(previous);
 
         if (
           looksLikeDeadlineLabel &&
           previousHasNoDate &&
-          !containsAny(previousLower, PENALTY_WORDS)
+          !containsAny(
+            previousLower,
+            PENALTY_WORDS
+          )
         ) {
-          answer = `${previous} ${answer}`;
+          answer =
+            `${previous} ${answer}`;
         }
       }
 
-      return cleanDeadlineSentence(answer);
+      return cleanDeadlineSentence(
+        answer
+      );
     }
 
-    const deadlineCandidate = candidates.find((candidate) => {
-      const lower = candidate.text.toLowerCase();
+    const deadlineCandidate =
+      candidates.find(
+        (candidate) => {
+          const lower =
+            candidate.text.toLowerCase();
 
-      return (
-        containsAny(lower, DEADLINE_WORDS) &&
-        !containsAny(lower, PENALTY_WORDS)
+          return (
+            containsAny(
+              lower,
+              DEADLINE_WORDS
+            ) &&
+            !containsAny(
+              lower,
+              PENALTY_WORDS
+            )
+          );
+        }
       );
-    });
 
     if (deadlineCandidate) {
-      return cleanDeadlineSentence(deadlineCandidate.text);
+      return cleanDeadlineSentence(
+        deadlineCandidate.text
+      );
     }
 
     return '';
   }
 
+  // ==========================================================
+  // 5. SUMMARY QUESTIONS
+  // ==========================================================
+
   /*
-   * =========================================================
-   * 5. BROAD / SUMMARY QUESTIONS
-   * =========================================================
+   * Summary questions are intentionally NOT answered with
+   * one arbitrary sentence.
    *
-   * The single-sentence fallback should NOT answer broad
-   * summary questions with an arbitrary sentence.
-   *
-   * Returning empty tells generateAnswer() to use the
-   * grounded LLM summary path if available.
+   * generateAnswer() handles these using multiple relevant
+   * retrieved chunks.
    */
 
   if (asksSummary) {
-    const usefulCandidates = candidates.filter((candidate) => {
-      const lower = candidate.text.toLowerCase();
+    return '';
+  }
 
-      const isDisclaimer =
-        containsAny(lower, [
-          'sample data',
-          'not official information',
-          'not official information from any real college',
-          'demo data',
-          'demonstration data'
-        ]);
+  // ==========================================================
+  // 6. NORMAL QUESTIONS
+  // ==========================================================
 
-      return !isDisclaimer;
-    });
+  const questionWords =
+    lowerQuestion
+      .split(/\s+/)
+      .filter(
+        (word) => word.length >= 4
+      );
 
-    if (usefulCandidates.length === 0) {
-      return '';
+  const scoredCandidates =
+    candidates.map(
+      (candidate, index) => {
+        const text =
+          candidate.text;
+
+        const lower =
+          text.toLowerCase();
+
+        let score = 0;
+
+        if (
+          paymentQuestion &&
+          containsAny(
+            lower,
+            PAYMENT_WORDS
+          )
+        ) {
+          score += 50;
+        }
+
+        if (
+          containsAny(
+            lower,
+            DEADLINE_WORDS
+          )
+        ) {
+          score += 20;
+        }
+
+        if (
+          containsAny(
+            lower,
+            PENALTY_WORDS
+          )
+        ) {
+          score -= 20;
+        }
+
+        if (
+          containsAny(
+            lower,
+            DISCLAIMER_WORDS
+          )
+        ) {
+          score -= 100;
+        }
+
+        for (
+          const word of questionWords
+        ) {
+          if (
+            lower.includes(word)
+          ) {
+            score += 5;
+          }
+        }
+
+        return {
+          text,
+          score,
+          index
+        };
+      }
+    );
+
+  scoredCandidates.sort(
+    (a, b) => {
+      if (
+        b.score !== a.score
+      ) {
+        return b.score - a.score;
+      }
+
+      return a.index - b.index;
+    }
+  );
+
+  const best =
+    scoredCandidates[0];
+
+  if (
+    !best ||
+    best.score <= 0
+  ) {
+    return '';
+  }
+
+  return cleanDeadlineSentence(
+    best.text
+  );
+}
+
+// ============================================================
+// GROUNDED SUMMARY GENERATOR
+// ============================================================
+
+function generateGroundedSummary(
+  question,
+  contextChunks
+) {
+  if (
+    !Array.isArray(contextChunks) ||
+    contextChunks.length === 0
+  ) {
+    return '';
+  }
+
+  const summaryCandidates = [];
+
+  for (
+    let chunkIndex = 0;
+    chunkIndex < contextChunks.length;
+    chunkIndex += 1
+  ) {
+    const chunk =
+      contextChunks[chunkIndex];
+
+    const content =
+      normalizeText(
+        chunk.content || ''
+      );
+
+    if (!content) {
+      continue;
     }
 
-    /*
-     * Do not force a random single sentence for a summary
-     * question. Let the grounded generation path summarize
-     * the retrieved evidence.
-     */
+    const fragments =
+      content
+        .split(/(?<=[.!?])\s+/)
+        .map((text) => text.trim())
+        .filter(Boolean);
+
+    for (
+      let index = 0;
+      index < fragments.length;
+      index += 1
+    ) {
+      const text =
+        fragments[index];
+
+      const lower =
+        text.toLowerCase();
+
+      if (
+        containsAny(
+          lower,
+          DISCLAIMER_WORDS
+        )
+      ) {
+        continue;
+      }
+
+      let score = 0;
+
+      /*
+       * Prefer substantive academic information.
+       */
+      if (
+        containsAny(lower, [
+          'academic',
+          'semester',
+          'course',
+          'tuition',
+          'fee',
+          'payment',
+          'deadline',
+          'registration',
+          'examination',
+          'exam',
+          'admission',
+          'student',
+          'attendance',
+          'requirement',
+          'requirement',
+          'important'
+        ])
+      ) {
+        score += 20;
+      }
+
+      /*
+       * Give factual sentences additional weight.
+       */
+      if (
+        findDate(text)
+      ) {
+        score += 10;
+      }
+
+      if (
+        containsAny(lower, [
+          'must',
+          'required',
+          'deadline',
+          'available',
+          'students',
+          'payment'
+        ])
+      ) {
+        score += 10;
+      }
+
+      /*
+       * Penalize sentences that are mainly disclaimers
+       * or navigation/header noise.
+       */
+      if (
+        text.length < 20
+      ) {
+        score -= 10;
+      }
+
+      summaryCandidates.push({
+        text,
+        score,
+        chunkIndex,
+        sentenceIndex: index
+      });
+    }
+  }
+
+  if (
+    summaryCandidates.length === 0
+  ) {
+    return '';
+  }
+
+  summaryCandidates.sort(
+    (a, b) =>
+      b.score -
+      a.score ||
+      a.chunkIndex -
+      b.chunkIndex ||
+      a.sentenceIndex -
+      b.sentenceIndex
+  );
+
+  /*
+   * Select up to three distinct useful facts.
+   */
+  const selected = [];
+  const seen = new Set();
+
+  for (
+    const candidate of summaryCandidates
+  ) {
+    const key =
+      candidate.text.toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    selected.push(candidate);
+
+    if (selected.length >= 3) {
+      break;
+    }
+  }
+
+  if (selected.length === 0) {
     return '';
   }
 
   /*
-   * =========================================================
-   * 6. NORMAL QUESTIONS
-   * =========================================================
+   * Preserve document order for readability.
    */
+  selected.sort(
+    (a, b) =>
+      a.chunkIndex -
+      b.chunkIndex ||
+      a.sentenceIndex -
+      b.sentenceIndex
+  );
 
-  const questionWords = lowerQuestion
-    .split(/\s+/)
-    .filter((word) => word.length >= 4);
+  return selected
+    .map((candidate) =>
+      cleanDeadlineSentence(
+        candidate.text
+      )
+    )
+    .filter(Boolean)
+    .join(' ');
+}
 
-  const scoredCandidates = candidates.map((candidate, index) => {
-    const text = candidate.text;
-    const lower = text.toLowerCase();
+// ============================================================
+// GENERATE ANSWER
+// ============================================================
 
-    let score = 0;
+const generateAnswer = async (
+  question,
+  contextChunks = [],
+  onToken = null
+) => {
+  const hasContext =
+    Array.isArray(contextChunks) &&
+    contextChunks.length > 0;
 
-    if (
-      paymentQuestion &&
-      containsAny(lower, PAYMENT_WORDS)
-    ) {
-      score += 50;
-    }
+  let contextText = '';
 
-    if (containsAny(lower, DEADLINE_WORDS)) {
-      score += 20;
-    }
+  if (hasContext) {
+    contextText =
+      contextChunks
+        .map((chunk, idx) => {
+          const pageInfo =
+            chunk.pageNumber
+              ? ` (Page ${chunk.pageNumber})`
+              : '';
 
-    if (containsAny(lower, PENALTY_WORDS)) {
-      score -= 20;
-    }
-
-    /*
-     * Never allow document disclaimers to win merely because
-     * they share generic words with the question.
-     */
-    if (
-      containsAny(lower, [
-        'sample data',
-        'not official information',
-        'not official information from any real college',
-        'demo data',
-        'demonstration data'
-      ])
-    ) {
-      score -= 100;
-    }
-
-    for (const word of questionWords) {
-      if (lower.includes(word)) {
-        score += 5;
-      }
-    }
-
-    return {
-      text,
-      score,
-      index
-    };
-  });
-
-  scoredCandidates.sort((a, b) => {
-    if (b.score !== a.score) {
-      return b.score - a.score;
-    }
-
-    return a.index - b.index;
-  });
-
-  const best = scoredCandidates[0];
-
-  if (!best || best.score <= 0) {
-    return '';
+          return `--- CONTEXT CHUNK ${idx + 1} [Source: "${chunk.documentTitle}"${pageInfo}] ---
+${chunk.content}`;
+        })
+        .join('\n\n');
   }
 
-  return cleanDeadlineSentence(best.text);
-}
+  const summaryQuestion =
+    isSummaryQuestion(question);
+
+  const amountQuestion =
+    containsAny(
+      normalizeText(question).toLowerCase(),
+      [
+        'how much',
+        'amount',
+        'cost',
+        'price',
+        'fee amount',
+        'tuition amount',
+        'semester fee amount',
+        'how much is the fee',
+        'what is the fee'
+      ]
+    );
+
+  // ==========================================================
+  // DETERMINISTIC DATE / DEADLINE HANDLING
+  // ==========================================================
+
+  if (
+    hasContext &&
+    isDateQuestion(question)
+  ) {
+    const bestChunk =
+      selectBestChunk(
+        question,
+        contextChunks
+      );
+
+    if (bestChunk) {
+      const answerText =
+        selectAnswerSentences(
+          question,
+          bestChunk.content
+        );
+
+      if (answerText) {
+        const pageLabel =
+          bestChunk.pageNumber
+            ? `, p. ${bestChunk.pageNumber}`
+            : '';
+
+        const synthesized =
+          `${answerText} [Source: ${bestChunk.documentTitle}${pageLabel}]`;
+
+        await streamText(
+          synthesized,
+          onToken,
+          25
+        );
+
+        return synthesized;
+      }
+    }
+  }
+
+  // ==========================================================
+  // OPENAI LLM
+  // ==========================================================
+
+  const apiKey =
+    env.llmApiKey;
+
+  if (
+    apiKey &&
+    apiKey.startsWith('sk-')
+  ) {
+    try {
+      const promptMessages = [
+        {
+          role: 'system',
+          content: SYSTEM_PROMPT
+        },
+        {
+          role: 'user',
+          content: `Retrieved College Context:
+${contextText || 'NO RELEVANT CONTEXT FOUND IN KNOWLEDGE BASE.'}
+
+Student Question:
+${question}`
+        }
+      ];
+
+      const aiResponse =
+        await fetchOpenAIChat(
+          promptMessages,
+          apiKey
+        );
+
+      if (aiResponse) {
+        return aiResponse;
+      }
+    } catch (err) {
+      console.warn(
+        '[LLMService] OpenAI LLM API call error, using grounded context generator:',
+        err.message
+      );
+    }
+  }
+
+  // ==========================================================
+  // NO CONTEXT SAFETY FALLBACK
+  // ==========================================================
+
+  if (!hasContext) {
+    const fallbackMsg =
+      'I could not find sufficient information regarding your query in the available official college knowledge base. Please check back after administrators upload relevant documents or contact your department administration directly.';
+
+    await streamText(
+      fallbackMsg,
+      onToken,
+      20
+    );
+
+    return fallbackMsg;
+  }
+
+  // ==========================================================
+  // BROAD SUMMARY FALLBACK
+  // ==========================================================
+
+  if (summaryQuestion) {
+    const summary =
+      generateGroundedSummary(
+        question,
+        contextChunks
+      );
+
+    if (summary) {
+      /*
+       * Use citations from the chunks that contributed to
+       * the summary.
+       */
+      const usedChunks =
+        contextChunks.filter(
+          (chunk) => {
+            const content =
+              normalizeText(
+                chunk.content || ''
+              ).toLowerCase();
+
+            return summary
+              .toLowerCase()
+              .includes(
+                content.slice(
+                  0,
+                  Math.min(
+                    40,
+                    content.length
+                  )
+                )
+              );
+          }
+        );
+
+      /*
+       * If exact matching is not possible, use the top
+       * relevant chunks as citation sources.
+       */
+      const citationChunks =
+        usedChunks.length > 0
+          ? usedChunks.slice(0, 3)
+          : contextChunks.slice(0, 3);
+
+      const citations =
+        citationChunks
+          .map((chunk) => {
+            const pageLabel =
+              chunk.pageNumber
+                ? `, p. ${chunk.pageNumber}`
+                : '';
+
+            return `[Source: ${chunk.documentTitle}${pageLabel}]`;
+          })
+          .filter(
+            (value, index, array) =>
+              array.indexOf(value) === index
+          )
+          .join(' ');
+
+      const synthesized =
+        `${summary} ${citations}`.trim();
+
+      await streamText(
+        synthesized,
+        onToken,
+        20
+      );
+
+      return synthesized;
+    }
+
+    const fallbackMsg =
+      'I could not find sufficient information regarding your query in the available official college knowledge base.';
+
+    await streamText(
+      fallbackMsg,
+      onToken,
+      20
+    );
+
+    return fallbackMsg;
+  }
+
+  // ==========================================================
+  // GROUNDED FALLBACK
+  // ==========================================================
+
+  const bestChunk =
+    selectBestChunk(
+      question,
+      contextChunks
+    );
+
+  /*
+   * For amount questions, if no chunk actually contains
+   * a numeric amount, do NOT fall through to an unrelated
+   * deadline sentence.
+   */
+  if (amountQuestion) {
+    const hasActualAmount =
+      contextChunks.some(
+        (chunk) => {
+          const content =
+            normalizeText(
+              chunk.content || ''
+            );
+
+          return (
+            /\b(?:₹|rs\.?|inr|\$|usd|€|eur|£)\s*[\d,]+(?:\.\d+)?\b/i.test(
+              content
+            ) ||
+            /\b[\d,]+(?:\.\d+)?\s*(?:rupees|rs|inr|usd|dollars|euros|pounds)\b/i.test(
+              content
+            )
+          );
+        }
+      );
+
+    if (!hasActualAmount) {
+      const fallbackMsg =
+        'I could not find sufficient information regarding the semester fee amount in the available official college knowledge base.';
+
+      await streamText(
+        fallbackMsg,
+        onToken,
+        20
+      );
+
+      return fallbackMsg;
+    }
+  }
+
+  if (!bestChunk) {
+    const fallbackMsg =
+      'I could not find sufficient information regarding your query in the available official college knowledge base.';
+
+    await streamText(
+      fallbackMsg,
+      onToken,
+      20
+    );
+
+    return fallbackMsg;
+  }
+
+  const answerText =
+    selectAnswerSentences(
+      question,
+      bestChunk.content
+    );
+
+  if (!answerText) {
+    const fallbackMsg =
+      'I could not find sufficient information regarding your query in the available official college knowledge base.';
+
+    await streamText(
+      fallbackMsg,
+      onToken,
+      20
+    );
+
+    return fallbackMsg;
+  }
+
+  const pageLabel =
+    bestChunk.pageNumber
+      ? `, p. ${bestChunk.pageNumber}`
+      : '';
+
+  const synthesized =
+    `${answerText} [Source: ${bestChunk.documentTitle}${pageLabel}]`;
+
+  await streamText(
+    synthesized,
+    onToken,
+    25
+  );
+
+  return synthesized;
+};
 
 // ============================================================
 // OPENAI API
@@ -1227,12 +1841,12 @@ function fetchOpenAIChat(
       const req =
         https.request(
           options,
-          res => {
+          (res) => {
             let body = '';
 
             res.on(
               'data',
-              chunk => {
+              (chunk) => {
                 body += chunk;
               }
             );
