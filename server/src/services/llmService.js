@@ -61,17 +61,12 @@ const generateAnswer = async (question, contextChunks = [], onToken = null) => {
     return fallbackMsg;
   }
 
-  // Synthesize answer grounded in retrieved chunks
-  let synthesized = `Based on official college documents (**${contextChunks[0].documentTitle}**):\n\n`;
-  
-  contextChunks.forEach((chunk, i) => {
-    const lines = chunk.content.split('\n').filter(l => l.trim().length > 0);
-    const keyExcerpt = lines.slice(0, 4).join(' ');
-    const pageLabel = chunk.pageNumber ? ` (Page ${chunk.pageNumber})` : '';
-    synthesized += `- **${chunk.documentTitle}${pageLabel}**: ${keyExcerpt}\n\n`;
-  });
-
-  synthesized += `*Note: This response is grounded directly in uploaded college reference material.*`;
+  // Keep the non-LLM experience useful: answer with the most relevant, complete
+  // sentence(s), rather than dumping leading lines from every retrieved chunk.
+  const bestChunk = selectBestChunk(question, contextChunks);
+  const answerText = selectAnswerSentences(question, bestChunk.content);
+  const pageLabel = bestChunk.pageNumber ? `, p. ${bestChunk.pageNumber}` : '';
+  const synthesized = `${answerText} [Source: ${bestChunk.documentTitle}${pageLabel}]`;
 
   if (onToken) {
     const chunksText = synthesized.split(/(?<=\s)/);
@@ -83,6 +78,49 @@ const generateAnswer = async (question, contextChunks = [], onToken = null) => {
 
   return synthesized;
 };
+
+function selectBestChunk(question, chunks) {
+  const terms = question.toLowerCase().match(/[a-z0-9]+/g) || [];
+  const meaningfulTerms = terms.filter(term => term.length > 2 && !new Set([
+    'what', 'when', 'where', 'which', 'does', 'with', 'from', 'that', 'this', 'about', 'have', 'will', 'your', 'college'
+  ]).has(term));
+
+  return chunks.reduce((best, chunk) => {
+    const score = meaningfulTerms.reduce((total, term) => (
+      total + (chunk.content.toLowerCase().includes(term) ? 1 : 0)
+    ), 0);
+    const bestScore = meaningfulTerms.reduce((total, term) => (
+      total + (best.content.toLowerCase().includes(term) ? 1 : 0)
+    ), 0);
+    return score > bestScore ? chunk : best;
+  }, chunks[0]);
+}
+
+function selectAnswerSentences(question, content) {
+  const sentences = content
+    .replace(/\s+/g, ' ')
+    .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+    ?.map(sentence => sentence.trim().replace(/^[•\-]\s*/, ''))
+    .filter(Boolean) || [];
+  const terms = question.toLowerCase().match(/[a-z0-9]+/g) || [];
+  const meaningfulTerms = terms.filter(term => term.length > 2);
+  const ranked = sentences
+    .map((sentence, index) => ({
+      sentence,
+      index,
+      score: meaningfulTerms.reduce((total, term) => (
+        total + (sentence.toLowerCase().includes(term) ? 1 : 0)
+      ), 0)
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const selected = ranked.filter(item => item.score > 0).slice(0, 2);
+
+  return (selected.length ? selected : ranked.slice(0, 1))
+    .sort((a, b) => a.index - b.index)
+    .map(item => item.sentence)
+    .join(' ')
+    .slice(0, 500);
+}
 
 /**
  * Invokes OpenAI API via HTTPS
