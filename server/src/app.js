@@ -12,9 +12,6 @@ const env = require('./config/env');
 const app = express();
 console.log('[DEBUG] THIS IS THE COLLEGEAI APP.JS');
 
-// Production CORS Configuration
-// Uses env.allowedOrigins which is parsed from CLIENT_URL (comma-separated).
-// http://localhost:3000 is always included for local development.
 const allowedOrigins = env.allowedOrigins;
 
 console.log('[CORS] Allowed origins:', allowedOrigins);

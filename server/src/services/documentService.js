@@ -50,7 +50,7 @@ const createAndProcessDocument = async ({ file, title, category = 'General', upl
       .single();
 
     if (error) {
-      throw { statusCode: 500, code: 'INTERNAL_SERVER_ERROR', message: error.message };
+      throw { statusCode: 500, code: 'INTERNAL_SERVER_ERROR', message: 'An unexpected internal server error occurred.' };
     }
     documentRecord = data;
   } else {
@@ -118,7 +118,7 @@ const createAndProcessDocument = async ({ file, title, category = 'General', upl
         errorMessage: procError.message
       }
     });
-    throw { statusCode: 500, code: 'DOCUMENT_PROCESSING_FAILED', message: `Document processing failed: ${procError.message}` };
+    throw { statusCode: 500, code: 'DOCUMENT_PROCESSING_FAILED', message: 'Document processing failed. Please try again later.' };
   }
 };
 
@@ -159,7 +159,9 @@ const getAllDocuments = async (categoryFilter = null) => {
       query = query.eq('category', categoryFilter);
     }
     const { data, error } = await query;
-    if (error) throw error;
+    if (error) {
+      throw { statusCode: 500, code: 'INTERNAL_SERVER_ERROR', message: 'An unexpected internal server error occurred.' };
+    }
     return data || [];
   } else {
     let docs = [...localDb.documents];
@@ -201,7 +203,9 @@ const deleteDocument = async (id) => {
 
   if (isSupabaseConfigured()) {
     const { data, error } = await supabase.from('documents').delete().eq('id', id).select().single();
-    if (error) throw error;
+    if (error) {
+      throw { statusCode: 500, code: 'INTERNAL_SERVER_ERROR', message: 'An unexpected internal server error occurred.' };
+    }
     return data;
   } else {
     const index = localDb.documents.findIndex(d => d.id === id);

@@ -58,7 +58,7 @@ const registerUser = async ({ name, email, password }) => {
       throw {
         statusCode: 500,
         code: 'INTERNAL_SERVER_ERROR',
-        message: error.message
+        message: 'An unexpected internal server error occurred.'
       };
     }
 

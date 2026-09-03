@@ -3,9 +3,12 @@ const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+const productionFrontendOrigin = 'https://college-ai-pink.vercel.app';
+const developmentJwtSecret = 'collegeai-dev-jwt-secret-key-2026';
+
 /**
- * Parse a comma-separated list of frontend origins from CLIENT_URL / FRONTEND_URL.
- * Always includes http://localhost:3000 so local dev works without extra config.
+ * Parse frontend origins from CLIENT_URL / FRONTEND_URL.
  */
 function parseAllowedOrigins() {
   const raw = process.env.CLIENT_URL || process.env.FRONTEND_URL || '';
@@ -13,7 +16,10 @@ function parseAllowedOrigins() {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
-  // Ensure localhost is always present for local development
+  if (nodeEnv === 'production') {
+    return [productionFrontendOrigin];
+  }
+
   if (!origins.includes('http://localhost:3000')) {
     origins.push('http://localhost:3000');
   }
@@ -22,15 +28,19 @@ function parseAllowedOrigins() {
 
 const allowedOrigins = parseAllowedOrigins();
 
+if (nodeEnv === 'production' && (!process.env.JWT_SECRET?.trim() || process.env.JWT_SECRET === developmentJwtSecret)) {
+  throw new Error('A non-development JWT_SECRET must be provided when NODE_ENV=production.');
+}
+
 module.exports = {
   port: process.env.PORT || 5000,
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
   // Array of allowed frontend origins for CORS
   allowedOrigins,
   // Legacy single-value clientUrl kept for backward compatibility
   clientUrl: allowedOrigins[0] || 'http://localhost:3000',
   databaseUrl: process.env.DATABASE_URL || '',
-  jwtSecret: process.env.JWT_SECRET || 'collegeai-dev-jwt-secret-key-2026',
+  jwtSecret: process.env.JWT_SECRET || developmentJwtSecret,
   llmApiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || '',
   embeddingApiKey: process.env.EMBEDDING_API_KEY || process.env.OPENAI_API_KEY || '',
   supabaseUrl: process.env.SUPABASE_URL || '',

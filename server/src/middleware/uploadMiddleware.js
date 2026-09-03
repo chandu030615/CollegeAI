@@ -3,19 +3,21 @@ const multer = require('multer');
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
-  const allowedMimeTypes = [
-    'application/pdf',
-    'text/plain',
-    'text/markdown',
-    'application/json',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  ];
+  const mimeByExtension = {
+    '.pdf': 'application/pdf',
+    '.txt': 'text/plain',
+    '.md': 'text/markdown',
+    '.json': 'application/json',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+  const originalName = typeof file.originalname === 'string' ? file.originalname : '';
+  const extension = originalName.slice(originalName.lastIndexOf('.')).toLowerCase();
 
-  if (allowedMimeTypes.includes(file.mimetype) || file.originalname.match(/\.(pdf|txt|md|doc|docx|json)$/i)) {
+  if (mimeByExtension[extension] === file.mimetype) {
     cb(null, true);
   } else {
-    cb(new Error('INVALID_FILE: Only PDF, TXT, MD, DOC, and DOCX documents are permitted.'), false);
+    cb(new Error('INVALID_FILE: File type does not match its extension.'), false);
   }
 };
 
