@@ -28,7 +28,10 @@ app.use(cors({
     }
     // Reject all other origins
     console.warn('[CORS] Blocked origin:', origin);
-    return callback(new Error(`CORS: Origin '${origin}' not allowed`));
+    const corsError = new Error('Origin is not allowed.');
+    corsError.statusCode = 403;
+    corsError.code = 'CORS_ORIGIN_NOT_ALLOWED';
+    return callback(corsError);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
